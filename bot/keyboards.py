@@ -35,10 +35,25 @@ def get_dm_keyboard(has_tg: bool = False, has_profile: bool = False) -> InlineKe
     builder.adjust(1)
     return builder.as_markup()
 
+def get_buyer_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📈 Статистика", callback_data="buyer_stats")
+    builder.button(text="📥 Экспорт в Excel", callback_data="buyer_export_stats")
+    builder.adjust(1)
+    return builder.as_markup()
+
 def get_approve_keyboard(user_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Одобрить", callback_data=f"approve_{user_id}")
     builder.button(text="❌ Отклонить", callback_data=f"reject_{user_id}")
+    return builder.as_markup()
+
+def get_approve_role_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👤 DM", callback_data=f"approve_role_dm_{user_id}")
+    builder.button(text="🛒 Buyer", callback_data=f"approve_role_buyer_{user_id}")
+    builder.button(text="❌ Отклонить", callback_data=f"reject_{user_id}")
+    builder.adjust(2, 1)
     return builder.as_markup()
 
 def get_profile_keyboard(has_profile: bool = False, is_admin: bool = False) -> InlineKeyboardMarkup:
@@ -73,6 +88,18 @@ def get_dms_list_keyboard(dms: list) -> InlineKeyboardMarkup:
         builder.button(text=f"👤 {dm['username'] or dm['tg_id']}", callback_data=f"dm_profile_{dm['tg_id']}")
     builder.adjust(1)
     builder.button(text="🔙 Назад", callback_data="admin_back")
+    return builder.as_markup()
+
+def get_buyer_dm_select_keyboard(user_id: int, dms: list, selected_dm_ids: set[int]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for dm in dms:
+        dm_tg_id = dm["tg_id"]
+        marker = "✅" if dm_tg_id in selected_dm_ids else "⬜"
+        label = dm["username"] or str(dm_tg_id)
+        builder.button(text=f"{marker} {label}", callback_data=f"buyer_toggle_dm_{user_id}_{dm_tg_id}")
+    builder.button(text="✅ Подтвердить", callback_data=f"buyer_confirm_{user_id}")
+    builder.button(text="🔙 Назад", callback_data=f"approve_{user_id}")
+    builder.adjust(1)
     return builder.as_markup()
 
 def get_dm_profile_keyboard(has_tg: bool = False) -> InlineKeyboardMarkup:

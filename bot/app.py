@@ -7,7 +7,7 @@ import logging
 from bot.config import BOT_TOKEN, LOG_LEVEL, ADMIN_IDS
 from bot.db import init_db, TGAccount, User, UserStatus, AccessRequest, RequestStatus, async_session_maker
 from bot.client import tg_manager
-from bot.handlers import admin, user, dm_tg, export_stats, dm_user
+from bot.handlers import admin, buyer, user, dm_tg, export_stats, dm_user
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL),
@@ -22,6 +22,7 @@ dp = Dispatcher()
 # Register routers
 dp.include_router(user.router)
 dp.include_router(admin.router)
+dp.include_router(buyer.router)
 dp.include_router(dm_tg.router)
 dp.include_router(export_stats.router)
 dp.include_router(dm_user.router)

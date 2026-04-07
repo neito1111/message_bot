@@ -30,6 +30,10 @@ class RequestStatus(str, enum.Enum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
 
+class UserRole(str, enum.Enum):
+    DM = "DM"
+    BUYER = "BUYER"
+
 class EventType(str, enum.Enum):
     REGA = "REGA"
     DEP = "DEP"
@@ -48,17 +52,28 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String(128), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[UserStatus] = mapped_column(Enum(UserStatus), default=UserStatus.PENDING, index=True)
+    role: Mapped[str] = mapped_column(String(16), default=UserRole.DM.value, server_default=UserRole.DM.value, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     tg_account: Mapped["TGAccount | None"] = relationship(back_populates="user", uselist=False)
     dm_profile: Mapped["DMProfile | None"] = relationship(back_populates="user", uselist=False)
     access_request: Mapped["AccessRequest | None"] = relationship(back_populates="user", uselist=False, foreign_keys="AccessRequest.user_id")
+    buyer_dm_links: Mapped[list["BuyerDM"]] = relationship(back_populates="buyer", foreign_keys="BuyerDM.buyer_user_id")
+    managed_by_buyers: Mapped[list["BuyerDM"]] = relationship(back_populates="dm_user", foreign_keys="BuyerDM.dm_user_id")
 
     @property
     def is_admin(self) -> bool:
         """Проверяет, является ли пользователь админом"""
         from bot.config import ADMIN_IDS
         return self.tg_id in ADMIN_IDS
+
+    @property
+    def is_buyer(self) -> bool:
+        return (self.role or UserRole.DM.value) == UserRole.BUYER.value
+
+    @property
+    def is_dm(self) -> bool:
+        return (self.role or UserRole.DM.value) == UserRole.DM.value
 
 class TGAccount(Base):
     __tablename__ = "tg_accounts"
@@ -87,6 +102,17 @@ class AccessRequest(Base):
 
     user: Mapped["User"] = relationship(back_populates="access_request", foreign_keys=[user_id])
     processed_by: Mapped["User | None"] = relationship(foreign_keys=[processed_by_id])
+
+class BuyerDM(Base):
+    __tablename__ = "buyer_dm_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    buyer_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    dm_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    buyer: Mapped["User"] = relationship(back_populates="buyer_dm_links", foreign_keys=[buyer_user_id])
+    dm_user: Mapped["User"] = relationship(back_populates="managed_by_buyers", foreign_keys=[dm_user_id])
 
 class DMProfile(Base):
     __tablename__ = "dm_profiles"
@@ -194,3 +220,6 @@ async def _run_safe_migrations(conn: AsyncSession) -> None:
         await conn.execute(text("ALTER TABLE tg_accounts ADD COLUMN api_id INTEGER"))
     if not await column_exists("tg_accounts", "api_hash"):
         await conn.execute(text("ALTER TABLE tg_accounts ADD COLUMN api_hash VARCHAR(128)"))
+    if not await column_exists("users", "role"):
+        await conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(16) DEFAULT 'DM'"))
+    await conn.execute(text("UPDATE users SET role = 'DM' WHERE role IS NULL"))
