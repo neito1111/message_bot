@@ -132,11 +132,8 @@ async def admin_requests_handler(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("approve_"))
+@router.callback_query(F.data.regexp(r"^approve_\d+$"))
 async def approve_handler(callback: CallbackQuery):
-    if callback.data.startswith("approve_role_"):
-        return
-
     user_id = int(callback.data.split("_")[1])
     await callback.message.edit_text(
         f"Выберите роль для пользователя {user_id}:",
@@ -224,7 +221,7 @@ async def buyer_confirm_handler(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("reject_"))
+@router.callback_query(F.data.regexp(r"^reject_\d+$"))
 async def reject_handler(callback: CallbackQuery, state: FSMContext):
     user_id = int(callback.data.split("_")[1])
     async with async_session_maker() as session:
