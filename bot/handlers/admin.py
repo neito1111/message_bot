@@ -23,6 +23,7 @@ from bot.keyboards import (
     get_back_keyboard,
     get_buyer_dm_select_keyboard,
     get_buyer_keyboard,
+    get_buyer_profile_keyboard,
     get_dm_keyboard,
     get_dm_phrases_admin_keyboard,
     get_dm_profile_keyboard,
@@ -57,6 +58,64 @@ async def get_available_dms(session) -> list[User]:
         .order_by(User.username.asc(), User.first_name.asc(), User.tg_id.asc())
     )
     return list(result.scalars().all())
+
+
+async def get_buyer_assigned_dm_tg_ids(session, buyer_user_id: int) -> list[int]:
+    result = await session.execute(
+        select(User.tg_id)
+        .join(BuyerDM, BuyerDM.dm_user_id == User.id)
+        .where(BuyerDM.buyer_user_id == buyer_user_id)
+        .order_by(User.tg_id.asc())
+    )
+    return [row[0] for row in result.all()]
+
+
+async def render_admin_user_profile(message, user: User) -> None:
+    async with async_session_maker() as session:
+        dm_result = await session.execute(select(DMProfile).where(DMProfile.user_id == user.id))
+        dm_profile = dm_result.scalar_one_or_none()
+
+        tg_result = await session.execute(select(TGAccount).where(TGAccount.user_id == user.id))
+        tg_account = tg_result.scalar_one_or_none()
+
+        if (user.role or UserRole.DM.value) == UserRole.BUYER.value:
+            buyer_links_result = await session.execute(
+                select(User)
+                .join(BuyerDM, BuyerDM.dm_user_id == User.id)
+                .where(BuyerDM.buyer_user_id == user.id)
+                .order_by(User.username.asc(), User.tg_id.asc())
+            )
+            assigned_dms = buyer_links_result.scalars().all()
+            assigned_text = "\n".join(
+                [f"• @{item.username}" if item.username else f"• {item.tg_id}" for item in assigned_dms]
+            ) or "Нет назначенных DM"
+            text = (
+                "Профиль Buyer\n\n"
+                f"TG ID: {user.tg_id}\n"
+                f"Username: @{user.username or 'N/A'}\n"
+                f"Роль: {user.role}\n"
+                f"Назначенные DM:\n{assigned_text}"
+            )
+            await message.edit_text(text, reply_markup=get_buyer_profile_keyboard(user.tg_id))
+            return
+
+        text = (
+            "Профиль DM\n\n"
+            f"TG ID: {user.tg_id}\n"
+            f"Username: @{user.username or 'N/A'}\n"
+            f"Тег: {dm_profile.tag if dm_profile and dm_profile.tag else 'Не задан'}\n"
+            f"TG аккаунт: {'Подключен' if tg_account else 'Не подключен'}\n"
+        )
+
+        if dm_profile:
+            if dm_profile.greeting_message1:
+                text += f"\nПриветствие 1: {dm_profile.greeting_message1[:50]}..."
+            if dm_profile.greeting_message2:
+                text += f"\nПриветствие 2: {dm_profile.greeting_message2[:50]}..."
+            if dm_profile.dodep_keyword:
+                text += f"\nКлючевая фраза: {dm_profile.dodep_keyword}"
+
+        await message.edit_text(text, reply_markup=get_dm_profile_keyboard(bool(tg_account)))
 
 
 async def finalize_user_approval(
@@ -289,16 +348,29 @@ async def admin_stats_handler(callback: CallbackQuery):
 @router.callback_query(F.data == "admin_dms")
 async def admin_dms_handler(callback: CallbackQuery):
     async with async_session_maker() as session:
-        dms = await get_available_dms(session)
+        from bot.config import ADMIN_IDS
+        result = await session.execute(
+            select(User)
+            .where(User.status == UserStatus.APPROVED)
+            .where(User.tg_id.not_in(ADMIN_IDS))
+            .order_by(User.role.asc(), User.username.asc(), User.first_name.asc(), User.tg_id.asc())
+        )
+        users = list(result.scalars().all())
 
-    if not dms:
-        await callback.message.edit_text("Нет DM пользователей", reply_markup=get_admin_keyboard())
+    if not users:
+        await callback.message.edit_text("Нет пользователей", reply_markup=get_admin_keyboard())
         await callback.answer()
         return
 
-    dms_list = [{"tg_id": dm.tg_id, "username": dm.username, "first_name": dm.first_name} for dm in dms]
+    dms_list = [{"tg_id": item.tg_id, "username": item.username, "first_name": item.first_name, "role": item.role} for item in users]
     await callback.message.edit_text(
-        f"DM пользователи ({len(dms_list)}):\n\n" + "\n".join([f"👤 {d['username'] or d['tg_id']}" for d in dms_list]),
+        f"Пользователи ({len(dms_list)}):\n\n"
+        + "\n".join(
+            [
+                f"{'🛒' if d['role'] == UserRole.BUYER.value else '👤'} {d['username'] or d['tg_id']} ({d['role']})"
+                for d in dms_list
+            ]
+        ),
         reply_markup=get_dms_list_keyboard(dms_list),
     )
     await callback.answer()
@@ -315,32 +387,63 @@ async def dm_profile_handler(callback: CallbackQuery, state: FSMContext):
         if not user:
             await callback.answer("Пользователь не найден", show_alert=True)
             return
-
-        dm_result = await session.execute(select(DMProfile).where(DMProfile.user_id == user.id))
-        dm_profile = dm_result.scalar_one_or_none()
-
-        tg_result = await session.execute(select(TGAccount).where(TGAccount.user_id == user.id))
-        tg_account = tg_result.scalar_one_or_none()
-
-        text = (
-            "Профиль DM\n\n"
-            f"TG ID: {user.tg_id}\n"
-            f"Username: @{user.username or 'N/A'}\n"
-            f"Тег: {dm_profile.tag if dm_profile and dm_profile.tag else 'Не задан'}\n"
-            f"TG аккаунт: {'Подключен' if tg_account else 'Не подключен'}\n"
-        )
-
-        if dm_profile:
-            if dm_profile.greeting_message1:
-                text += f"\nПриветствие 1: {dm_profile.greeting_message1[:50]}..."
-            if dm_profile.greeting_message2:
-                text += f"\nПриветствие 2: {dm_profile.greeting_message2[:50]}..."
-            if dm_profile.dodep_keyword:
-                text += f"\nКлючевая фраза: {dm_profile.dodep_keyword}"
-
-        await callback.message.edit_text(text, reply_markup=get_dm_profile_keyboard(bool(tg_account)))
+    await render_admin_user_profile(callback.message, user)
 
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_buyer_dms_"))
+async def edit_buyer_dms_handler(callback: CallbackQuery, state: FSMContext):
+    buyer_tg_id = int(callback.data.split("_")[-1])
+
+    async with async_session_maker() as session:
+        buyer_result = await session.execute(select(User).where(User.tg_id == buyer_tg_id))
+        buyer = buyer_result.scalar_one_or_none()
+        if not buyer:
+            await callback.answer("Buyer не найден", show_alert=True)
+            return
+
+        dms = await get_available_dms(session)
+        selected_dm_ids = set(await get_buyer_assigned_dm_tg_ids(session, buyer.id))
+
+    await state.update_data(buyer_user_id=buyer_tg_id, selected_buyer_dm_ids=sorted(selected_dm_ids), buyer_edit_mode=True)
+    dms_payload = [{"tg_id": dm.tg_id, "username": dm.username, "first_name": dm.first_name} for dm in dms]
+    await callback.message.edit_text(
+        f"Редактирование DM для buyer {buyer_tg_id}:",
+        reply_markup=get_buyer_dm_select_keyboard(
+            buyer_tg_id,
+            dms_payload,
+            selected_dm_ids,
+            confirm_callback=f"buyer_save_edit_{buyer_tg_id}",
+            back_callback=f"dm_profile_{buyer_tg_id}",
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("buyer_save_edit_"))
+async def buyer_save_edit_handler(callback: CallbackQuery, state: FSMContext):
+    buyer_tg_id = int(callback.data.split("_")[-1])
+    data = await state.get_data()
+    selected_dm_ids = data.get("selected_buyer_dm_ids", [])
+
+    async with async_session_maker() as session:
+        buyer_result = await session.execute(select(User).where(User.tg_id == buyer_tg_id))
+        buyer = buyer_result.scalar_one_or_none()
+        if not buyer:
+            await callback.answer("Buyer не найден", show_alert=True)
+            return
+
+        await session.execute(delete(BuyerDM).where(BuyerDM.buyer_user_id == buyer.id))
+        if selected_dm_ids:
+            dm_result = await session.execute(select(User).where(User.tg_id.in_(selected_dm_ids)))
+            for dm_user in dm_result.scalars().all():
+                session.add(BuyerDM(buyer_user_id=buyer.id, dm_user_id=dm_user.id))
+        await session.commit()
+
+    await state.clear()
+    await render_admin_user_profile(callback.message, buyer)
+    await callback.answer("Привязки buyer обновлены")
 
 
 @router.callback_query(F.data == "admin_back")
